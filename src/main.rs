@@ -1,16 +1,17 @@
+use async_channel::{Receiver, Sender};
+use log::{debug, error, info};
 use miniquad::{
-    conf, window,
-    BufferSource, BufferType, BufferUsage, EventHandler,
-    RenderingBackend,
+    conf, window, BufferSource, BufferType, BufferUsage, EventHandler, RenderingBackend,
 };
-use async_channel::{Sender, Receiver};
 use smol::Task;
 use std::{
     collections::HashMap,
-    sync::{mpsc, Arc, Mutex as SyncMutex, atomic::{AtomicU32, Ordering}},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        mpsc, Arc, Mutex as SyncMutex,
+    },
     thread,
 };
-use log::{debug, info, error};
 
 pub type ExecutorPtr = Arc<smol::Executor<'static>>;
 
@@ -293,49 +294,7 @@ impl Stage {
     ) -> Self {
         let ctx: Box<dyn RenderingBackend> = window::new_rendering_backend();
 
-        Stage {
-            app,
-            ctx,
-            buffers: HashMap::new(),
-            method_rep,
-            resize_sendr,
-        }
-    }
-
-    fn process_method(&mut self, method: GraphicsMethod) {
-        match method {
-            GraphicsMethod::NewVertexBuffer((verts, sendr)) => {
-                self.method_new_vertex_buffer(verts, sendr)
-            }
-            GraphicsMethod::NewIndexBuffer((indices, sendr)) => {
-                self.method_new_index_buffer(indices, sendr)
-            }
-            GraphicsMethod::DeleteBuffer(buffer) => self.method_delete_buffer(buffer),
-        };
-    }
-
-    fn method_new_vertex_buffer(&mut self, verts: Vec<Vertex>, gfx_buffer_id: GfxBufferId) {
-        let buffer = self.ctx.new_buffer(
-            BufferType::VertexBuffer,
-            BufferUsage::Immutable,
-            BufferSource::slice(&verts),
-        );
-        debug!(target: "gfx", "Invoked method: new_vertex_buffer(..., {gfx_buffer_id}) -> {buffer:?}");
-        self.buffers.insert(gfx_buffer_id, buffer);
-    }
-    fn method_new_index_buffer(&mut self, indices: Vec<u16>, gfx_buffer_id: GfxBufferId) {
-        let buffer = self.ctx.new_buffer(
-            BufferType::IndexBuffer,
-            BufferUsage::Immutable,
-            BufferSource::slice(&indices),
-        );
-        debug!(target: "gfx", "Invoked method: new_index_buffer(..., {gfx_buffer_id}) -> {buffer:?}");
-        self.buffers.insert(gfx_buffer_id, buffer);
-    }
-    fn method_delete_buffer(&mut self, gfx_buffer_id: GfxBufferId) {
-        let buffer = self.buffers.remove(&gfx_buffer_id).expect("couldn't find gfx_buffer_id");
-        debug!(target: "gfx", "Invoked method: delete_buffer({gfx_buffer_id} = {buffer:?})");
-        self.ctx.delete_buffer(buffer);
+        Stage { app, ctx, buffers: HashMap::new(), method_rep, resize_sendr }
     }
 }
 
@@ -343,7 +302,32 @@ impl EventHandler for Stage {
     fn update(&mut self) {
         //// Process as many methods as we can
         while let Ok(method) = self.method_rep.try_recv() {
-            self.process_method(method);
+            match method {
+                GraphicsMethod::NewVertexBuffer((verts, gfx_buffer_id)) => {
+                    let buffer = self.ctx.new_buffer(
+                        BufferType::VertexBuffer,
+                        BufferUsage::Immutable,
+                        BufferSource::slice(&verts),
+                    );
+                    debug!(target: "gfx", "Invoked method: new_vertex_buffer(..., {gfx_buffer_id}) -> {buffer:?}");
+                    self.buffers.insert(gfx_buffer_id, buffer);
+                }
+                GraphicsMethod::NewIndexBuffer((indices, gfx_buffer_id)) => {
+                    let buffer = self.ctx.new_buffer(
+                        BufferType::IndexBuffer,
+                        BufferUsage::Immutable,
+                        BufferSource::slice(&indices),
+                    );
+                    debug!(target: "gfx", "Invoked method: new_index_buffer(..., {gfx_buffer_id}) -> {buffer:?}");
+                    self.buffers.insert(gfx_buffer_id, buffer);
+                }
+                GraphicsMethod::DeleteBuffer(gfx_buffer_id) => {
+                    let buffer =
+                        self.buffers.remove(&gfx_buffer_id).expect("couldn't find gfx_buffer_id");
+                    debug!(target: "gfx", "Invoked method: delete_buffer({gfx_buffer_id} = {buffer:?})");
+                    self.ctx.delete_buffer(buffer);
+                }
+            };
         }
     }
 
@@ -396,4 +380,3 @@ fn main() {
 
     debug!(target: "main", "Started GFX backend");
 }
-
